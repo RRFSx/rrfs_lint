@@ -217,10 +217,23 @@ def rule_rrfs005_ndate_not_date(ctx: RuleContext) -> list[Violation]:
     violations = []
     if _is_comment_or_blank(ctx.line):
         return violations
-    # Flag `date -d` or `date --date` patterns that look like date arithmetic
-    pattern = re.compile(r'\bdate\s+(-d|--date)\b')
+    # Flag `date -d` or `date --date` patterns that look like date arithmetic.
+    # If the string argument after -d contains only digits, variable refs, colons,
+    # spaces, and braces (e.g. "${CDATEp:0:8} ${CDATEp:8:2}"), it is just
+    # reformatting an existing date — not computing a new one.  If it contains
+    # alphabetic / non-digit words (e.g. "yesterday", "2 days ago"), that is
+    # date arithmetic and should use ${NDATE}.
+    pattern = re.compile(r'\bdate\s+(-d|--date)\s+("([^"]*)"|\'([^\']*)\'|(\S+))')
     for m in pattern.finditer(ctx.line):
         if not _in_comment(ctx.line, m.start()) and not _in_single_quotes(ctx.line, m.start()):
+            # Extract the argument string (from whichever capture group matched)
+            date_arg = m.group(3) or m.group(4) or m.group(5) or ""
+            # Strip variable references like ${VAR}, ${VAR:0:8} etc.
+            stripped = re.sub(r'\$\{[^}]*\}', '', date_arg)
+            stripped = re.sub(r'\$[A-Za-z_]\w*', '', stripped)
+            # After removing vars, if what remains has letters it's arithmetic
+            if not re.search(r'[a-zA-Z]', stripped):
+                continue  # digits-only / var-only — just formatting
             violations.append(Violation(
                 filepath=ctx.filepath,
                 line_no=ctx.line_no,
@@ -263,6 +276,9 @@ def rule_rrfs007_export_uppercase(ctx: RuleContext) -> list[Violation]:
     for m in pattern.finditer(ctx.line):
         if not _in_comment(ctx.line, m.start()):
             varname = m.group(1)
+            # Allow 'export err=$?' as a well-known idiom
+            if varname == "err":
+                continue
             violations.append(Violation(
                 filepath=ctx.filepath,
                 line_no=ctx.line_no,
@@ -270,7 +286,7 @@ def rule_rrfs007_export_uppercase(ctx: RuleContext) -> list[Violation]:
                 rule_id="RRFS007",
                 severity="error",
                 message=f"Exported variable '{varname}' should be capitalized or start with an uppercase letter.",
-                suggestion=f"Rename '{varname}' to '{varname.upper()}' or '{varname[0:1].upper() + varname[2:]}'.",
+                suggestion=f"Rename '{varname}' to '{varname.upper()}' or '{varname[0].upper() + varname[2:]}'.",
                 source_line=ctx.line,
             ))
     return violations
@@ -380,6 +396,39 @@ def rule_rrfs011_z_quoted(ctx: RuleContext) -> list[Violation]:
     return violations
 
 
+def _find_header_lines(lines: list[str], expected: list[str]) -> list[tuple[int, str, str]]:
+    """Match expected header lines against file lines, skipping comment/blank
+    lines between the shebang and the rest of the header.
+
+    Returns a list of (0-based line index, actual text, expected text) for each
+    expected header entry.  The shebang (expected[0]) is always checked at
+    line 0.  Subsequent expected lines are matched against the first
+    non-comment, non-blank lines after the shebang.
+    """
+    results: list[tuple[int, str, str]] = []
+    # First entry is always the shebang at line 0
+    actual0 = lines[0].rstrip() if lines else ""
+    results.append((0, actual0, expected[0]))
+
+    # For the remaining expected lines, skip over comment / blank lines
+    exp_idx = 1
+    for file_idx in range(1, len(lines)):
+        if exp_idx >= len(expected):
+            break
+        stripped = lines[file_idx].strip()
+        if stripped == "" or stripped.startswith("#"):
+            continue  # skip comments and blanks between header lines
+        results.append((file_idx, lines[file_idx].rstrip(), expected[exp_idx]))
+        exp_idx += 1
+
+    # If we ran out of file lines before matching all expected entries
+    while exp_idx < len(expected):
+        results.append((len(lines), "", expected[exp_idx]))
+        exp_idx += 1
+
+    return results
+
+
 def rule_rrfs012_job_header(ctx: RuleContext) -> list[Violation]:
     """RRFS012: Job files (jobs/) must start with the required header."""
     violations = []
@@ -394,16 +443,15 @@ def rule_rrfs012_job_header(ctx: RuleContext) -> list[Violation]:
         "set -x",
         "date",
     ]
-    for i, exp in enumerate(expected):
-        actual = ctx.lines[i].rstrip() if i < len(ctx.lines) else ""
+    for file_idx, actual, exp in _find_header_lines(ctx.lines, expected):
         if actual != exp:
             violations.append(Violation(
                 filepath=ctx.filepath,
-                line_no=i + 1,
+                line_no=file_idx + 1,
                 col=1,
                 rule_id="RRFS012",
                 severity="error",
-                message=f"Job file header line {i + 1} should be: {exp}",
+                message=f"Job file header should contain: {exp}",
                 suggestion=exp,
                 source_line=actual,
             ))
@@ -422,16 +470,15 @@ def rule_rrfs013_script_header(ctx: RuleContext) -> list[Violation]:
         "#!/usr/bin/env bash",
         "declare -rx PS4='+ $(basename ${BASH_SOURCE[0]:-${FUNCNAME[0]:-\"Unknown\"}})[${LINENO}]${id}: '",
     ]
-    for i, exp in enumerate(expected):
-        actual = ctx.lines[i].rstrip() if i < len(ctx.lines) else ""
+    for file_idx, actual, exp in _find_header_lines(ctx.lines, expected):
         if actual != exp:
             violations.append(Violation(
                 filepath=ctx.filepath,
-                line_no=i + 1,
+                line_no=file_idx + 1,
                 col=1,
                 rule_id="RRFS013",
                 severity="error",
-                message=f"Script file header line {i + 1} should be: {exp}",
+                message=f"Script file header should contain: {exp}",
                 suggestion=exp,
                 source_line=actual,
             ))
@@ -465,18 +512,20 @@ def rule_rrfs015_bool_no_quotes(ctx: RuleContext) -> list[Violation]:
     violations = []
     if _is_comment_or_blank(ctx.line):
         return violations
-    # Only match assignments like VAR="true" or VAR="false", not comparisons like == "TRUE"
-    pattern = re.compile(r'(?<!=)=\s*"(true|false)"', re.IGNORECASE)
+    # Only match assignments like VAR="true" or VAR="false" (lowercase only),
+    # immediately after = with no space.  Do not match comparisons like == "TRUE"
+    # or != "true" or default values like :-"false".
+    pattern = re.compile(r'(?<!=)(?<!!)(?<!-)="(true|false)"')
     for m in pattern.finditer(ctx.line):
         if not _in_comment(ctx.line, m.start()):
-            val = m.group(1).lower()
+            val = m.group(1)
             violations.append(Violation(
                 filepath=ctx.filepath,
                 line_no=ctx.line_no,
                 col=m.start() + 1,
                 rule_id="RRFS015",
                 severity="warning",
-                message=f"Use {val} without quotes instead of \"{m.group(1)}\".",
+                message=f"Use {val} without quotes instead of \"{val}\".",
                 suggestion=ctx.line[:m.start()] + "=" + val + ctx.line[m.end():],
                 source_line=ctx.line,
             ))
