@@ -88,7 +88,9 @@ def _in_comment(line: str, pos: int) -> bool:
 
 
 def _get_file_level_disables(lines: list[str]) -> set[str]:
-    """Collect file-level rule disables from top comments."""
+    """Collect file-level rule disables from top comments.
+    Supports ``file-disable=all`` to suppress every rule for the entire file.
+    """
     disables: set[str] = set()
     for line in lines:
         stripped = line.strip()
@@ -96,7 +98,11 @@ def _get_file_level_disables(lines: list[str]) -> set[str]:
             m = _FILE_DISABLE_RE.search(stripped)
             if m:
                 for rule_id in m.group(1).split(","):
-                    disables.add(rule_id.strip().upper())
+                    token = rule_id.strip().upper()
+                    if token == "ALL":
+                        disables.add("ALL")
+                    else:
+                        disables.add(token)
         else:
             break  # stop at first non-comment, non-blank line
     return disables
@@ -276,8 +282,8 @@ def rule_rrfs007_export_uppercase(ctx: RuleContext) -> list[Violation]:
     for m in pattern.finditer(ctx.line):
         if not _in_comment(ctx.line, m.start()):
             varname = m.group(1)
-            # Allow 'export err=$?' as a well-known idiom
-            if varname == "err" or varname = "pgm":
+            # Allow 'export err=$?' and 'export pgm=...' as well-known idioms
+            if varname == "err" or varname == "pgm":
                 continue
             violations.append(Violation(
                 filepath=ctx.filepath,
@@ -668,6 +674,10 @@ def lint_file(
     in_scripts = "scripts" in path_parts
 
     file_disables = _get_file_level_disables(lines)
+
+    # file-disable=all skips the entire file
+    if "ALL" in file_disables:
+        return []
 
     violations: list[Violation] = []
 
