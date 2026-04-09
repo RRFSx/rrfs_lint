@@ -277,7 +277,7 @@ def rule_rrfs007_export_uppercase(ctx: RuleContext) -> list[Violation]:
         if not _in_comment(ctx.line, m.start()):
             varname = m.group(1)
             # Allow 'export err=$?' as a well-known idiom
-            if varname == "err":
+            if varname == "err" || varname = "pgm":
                 continue
             violations.append(Violation(
                 filepath=ctx.filepath,
