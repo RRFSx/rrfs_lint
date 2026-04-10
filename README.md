@@ -1,21 +1,21 @@
-# rrfs_lint — RRFS Code Norm Linter
+# linter_rrfs_code_norms — RRFS Code Norm Linting
 
-A Python-based linter that checks shell scripts against RRFS coding standards.
+A Python-based linter that checks shell scripts against RRFS coding norms.
 
 ## Quick Start
 
 ```bash
 # Lint everything in the current directory (recursive)
-rrfs_lint.py .
+linter_rrfs_code_norms.py .
 
 # Lint specific files
-rrfs_lint.py scripts/exrrfs_fcst.sh jobs/JRRFS_FCST
+linter_rrfs_code_norms.py scripts/exrrfs_fcst.sh jobs/JRRFS_FCST
 
 # List all rules
-rrfs_lint.py --list-rules
+linter_rrfs_code_norms.py --list-rules
 
 # Running with no arguments prints the help message
-rrfs_lint.py
+linter_rrfs_code_norms.py
 ```
 
 ## Requirements
@@ -49,7 +49,7 @@ rrfs_lint.py
 ## Command-Line Options
 
 ```
-usage: rrfs_lint [-h] [--format {default,compact,json}] [--disable RULES]
+usage: linter_rrfs_code_norms [-h] [--format {default,compact,json}] [--disable RULES]
                  [--enable RULES] [--no-recursive] [--list-rules]
                  [--severity {all,error,warning}] [paths ...]
 
@@ -69,16 +69,16 @@ options:
 
 ```bash
 # Only check for tab and bracket issues
-rrfs_lint.py --enable RRFS002,RRFS006 myscript.sh
+linter_rrfs_code_norms.py --enable RRFS002,RRFS006 myscript.sh
 
 # Skip the -f vs -s rule
-rrfs_lint.py --disable RRFS004 .
+linter_rrfs_code_norms.py --disable RRFS004 .
 
 # JSON output for CI integration
-rrfs_lint.py --format json scripts/ > lint_results.json
+linter_rrfs_code_norms.py --format json scripts/ > lint_results.json
 
 # Only show errors (skip warnings)
-rrfs_lint.py --severity error .
+linter_rrfs_code_norms.py --severity error .
 ```
 
 ## Suppression Mechanism
@@ -162,9 +162,9 @@ echo $foo  # rrfslint: disable=RRFS009,RRFS014
 The exit code is **1** if any violations are found, **0** if clean. Use this in CI pipelines:
 
 ```bash
-rrfs_lint.py --format compact scripts/ jobs/
+linter_rrfs_code_norms.py --format compact scripts/ jobs/
 if [[ $? -ne 0 ]]; then
-  echo "RRFS lint check failed"
+  echo "RRFS code norm linting failed"
   exit 1
 fi
 ```
@@ -175,12 +175,12 @@ Sample test files are provided in `tests/`:
 
 ```bash
 # Run against the intentionally bad example
-rrfs_lint.py tests/bad_example.sh
+linter_rrfs_code_norms.py tests/bad_example.sh
 
 # Run against the suppression examples
-rrfs_lint.py tests/suppressed_example.sh
-rrfs_lint.py tests/file_suppressed_example.sh
+linter_rrfs_code_norms.py tests/suppressed_example.sh
+linter_rrfs_code_norms.py tests/file_suppressed_example.sh
 
 # Run against the good examples (should pass clean)
-rrfs_lint.py tests/jobs/ tests/scripts/
+linter_rrfs_code_norms.py tests/jobs/ tests/scripts/
 ```

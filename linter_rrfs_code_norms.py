@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 """
-rrfs_lint — RRFS Code Norm Linting
+RRFS Code Norm Linting
+Checks shell scripts against RRFS coding norms, include some NCO implementation standards
 
-Checks shell scripts against RRFS coding norms
 Supports inline suppression: # rrfslint: disable=RRFS001,RRFS002
 Supports next line suppression: # rrfslint: disable-next-line=RRFS001,RRFS002
 Supports file-level suppression at top of file: # rrfslint: file-disable=RRFS001
+More information: https://github.com/RRFSx/linter_rrfs_code_norms
 """
 
 import argparse
@@ -662,7 +663,7 @@ def lint_file(
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             raw_lines = f.readlines()
     except OSError as exc:
-        print(f"rrfs_lint: cannot read {filepath}: {exc}", file=sys.stderr)
+        print(f"linter_rrfs_code_norms: cannot read {filepath}: {exc}", file=sys.stderr)
         return []
 
     lines = [line.rstrip("\n\r") for line in raw_lines]
@@ -916,7 +917,7 @@ def list_rules():
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="rrfs_lint",
+        prog="linter_rrfs_code_norms",
         description="RRFS Code Norm Linter — lint shell scripts against RRFS coding norms.",
     )
     parser.add_argument(
@@ -976,7 +977,7 @@ def main():
     scripts = find_shell_scripts(args.paths, recursive=not args.no_recursive)
 
     if not scripts:
-        print("rrfs_lint: no shell scripts found.", file=sys.stderr)
+        print("linter_rrfs_code_norms: no shell scripts found.", file=sys.stderr)
         # Still emit valid output for structured formats
         if args.format in ("sarif", "json", "github"):
             print(FORMATTERS[args.format]([]))
@@ -1000,7 +1001,7 @@ def main():
             warnings = sum(1 for v in all_violations if v.severity == "warning")
             files_with_issues = len(set(v.filepath for v in all_violations))
             print(f"\n{'=' * 60}")
-            print(f"rrfs_lint: {len(all_violations)} issues ({errors} errors, {warnings} warnings) "
+            print(f"linter_rrfs_code_norms: {len(all_violations)} issues ({errors} errors, {warnings} warnings) "
                   f"in {files_with_issues} file(s).")
         sys.exit(1)
     else:
@@ -1008,7 +1009,7 @@ def main():
         if args.format in ("sarif", "json", "github"):
             print(formatter([]))
         elif args.format == "default":
-            print(f"rrfs_lint: all {len(scripts)} file(s) passed.")
+            print(f"linter_rrfs_code_norms: all {len(scripts)} file(s) passed.")
         sys.exit(0)
 
 
