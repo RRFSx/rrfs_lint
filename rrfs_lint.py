@@ -840,7 +840,7 @@ def format_sarif(violations: list[Violation]) -> str:
             {
                 "tool": {
                     "driver": {
-                        "name": "RRFS Code Norm Linter",
+                        "name": "RRFS Code Norm Linting",
                         "informationUri": "https://github.com/NOAA-EMC/rrfs-workflow",
                         "version": "1.0.0",
                         "rules": rule_descriptors,
