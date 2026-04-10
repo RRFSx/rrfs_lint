@@ -959,6 +959,9 @@ def main():
 
     if not scripts:
         print("rrfs_lint: no shell scripts found.", file=sys.stderr)
+        # Still emit valid output for structured formats
+        if args.format in ("sarif", "json", "github"):
+            print(FORMATTERS[args.format]([]))
         sys.exit(0)
 
     all_violations: list[Violation] = []
@@ -969,8 +972,9 @@ def main():
     if args.severity != "all":
         all_violations = [v for v in all_violations if v.severity == args.severity]
 
+    formatter = FORMATTERS[args.format]
+
     if all_violations:
-        formatter = FORMATTERS[args.format]
         print(formatter(all_violations))
         # Summary
         if args.format == "default":
@@ -982,7 +986,10 @@ def main():
                   f"in {files_with_issues} file(s).")
         sys.exit(1)
     else:
-        if args.format == "default":
+        # Always emit valid output for structured formats
+        if args.format in ("sarif", "json", "github"):
+            print(formatter([]))
+        elif args.format == "default":
             print(f"rrfs_lint: all {len(scripts)} file(s) passed.")
         sys.exit(0)
 
