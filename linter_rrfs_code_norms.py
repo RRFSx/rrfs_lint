@@ -1,18 +1,19 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
-rrfs_lint — RRFS Code Norm Linting
+RRFS Code Norm Linting
+Checks shell scripts against RRFS coding norms, include some NCO implementation standards
 
-Checks shell scripts against RRFS coding norms
 Supports inline suppression: # rrfslint: disable=RRFS001,RRFS002
 Supports next line suppression: # rrfslint: disable-next-line=RRFS001,RRFS002
 Supports file-level suppression at top of file: # rrfslint: file-disable=RRFS001
+More information: https://github.com/RRFSx/linter_rrfs_code_norms
 """
 
 import argparse
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -88,7 +89,9 @@ def _in_comment(line: str, pos: int) -> bool:
 
 
 def _get_file_level_disables(lines: list[str]) -> set[str]:
-    """Collect file-level rule disables from top comments."""
+    """Collect file-level rule disables from top comments.
+    Supports ``file-disable=all`` to suppress every rule for the entire file.
+    """
     disables: set[str] = set()
     for line in lines:
         stripped = line.strip()
@@ -96,7 +99,11 @@ def _get_file_level_disables(lines: list[str]) -> set[str]:
             m = _FILE_DISABLE_RE.search(stripped)
             if m:
                 for rule_id in m.group(1).split(","):
-                    disables.add(rule_id.strip().upper())
+                    token = rule_id.strip().upper()
+                    if token == "ALL":
+                        disables.add("ALL")
+                    else:
+                        disables.add(token)
         else:
             break  # stop at first non-comment, non-blank line
     return disables
@@ -276,8 +283,8 @@ def rule_rrfs007_export_uppercase(ctx: RuleContext) -> list[Violation]:
     for m in pattern.finditer(ctx.line):
         if not _in_comment(ctx.line, m.start()):
             varname = m.group(1)
-            # Allow 'export err=$?' as a well-known idiom
-            if varname == "err" or varname = "pgm":
+            # Allow 'export err=$?', 'export pgm=...', etc as well-known idioms
+            if varname == "err" or varname == "pgm" or varname == "pid" or varname == "cyc" or varname == "jobid" or varname == "pgmout":
                 continue
             violations.append(Violation(
                 filepath=ctx.filepath,
@@ -568,8 +575,6 @@ def rule_rrfs017_standard_varnames(ctx: RuleContext) -> list[Violation]:
         return violations
     renames = {
         "YYYYMMDD": "PDY",
-        "HH": "cyc",
-        "MM": "subcyc",
         "YYYYMMDDHH": "CDATE",
     }
     for old, new in renames.items():
@@ -658,16 +663,20 @@ def lint_file(
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             raw_lines = f.readlines()
     except OSError as exc:
-        print(f"rrfs_lint: cannot read {filepath}: {exc}", file=sys.stderr)
+        print(f"linter_rrfs_code_norms: cannot read {filepath}: {exc}", file=sys.stderr)
         return []
 
-    lines = [l.rstrip("\n\r") for l in raw_lines]
+    lines = [line.rstrip("\n\r") for line in raw_lines]
     abs_path = os.path.abspath(filepath)
     path_parts = Path(abs_path).parts
     in_jobs = "jobs" in path_parts
     in_scripts = "scripts" in path_parts
 
     file_disables = _get_file_level_disables(lines)
+
+    # file-disable=all skips the entire file
+    if "ALL" in file_disables:
+        return []
 
     violations: list[Violation] = []
 
@@ -778,10 +787,117 @@ def format_json(violations: list[Violation]) -> str:
     return json.dumps(data, indent=2)
 
 
+def format_sarif(violations: list[Violation]) -> str:
+    """SARIF 2.1.0 output for GitHub Code Scanning integration."""
+    import json
+
+    rules_seen: dict[str, int] = {}  # rule_id -> index
+    rule_descriptors = []
+    for rule_id, desc, _fn in ALL_RULES:
+        rules_seen[rule_id] = len(rule_descriptors)
+        rule_descriptors.append({
+            "id": rule_id,
+            "name": rule_id,
+            "shortDescription": {"text": desc},
+            "helpUri": f"https://github.com/NOAA-EMC/rrfs-workflow/blob/develop/workflow/tools/linter_rrfs_code_norm_check.py#{rule_id}",
+            "properties": {"tags": ["rrfs", "coding-standards"]},
+        })
+
+    results = []
+    cwd = os.getcwd()
+    for v in violations:
+        # SARIF severity levels: error, warning, note
+        level = "error" if v.severity == "error" else "warning"
+        # Use path relative to cwd for GitHub Code Scanning
+        rel_path = os.path.relpath(v.filepath, cwd)
+        result = {
+            "ruleId": v.rule_id,
+            "ruleIndex": rules_seen.get(v.rule_id, 0),
+            "level": level,
+            "message": {
+                "text": f"{v.message}\nSuggestion: {v.suggestion}",
+            },
+            "locations": [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {
+                            "uri": rel_path,
+                            "uriBaseId": "%SRCROOT%",
+                        },
+                        "region": {
+                            "startLine": v.line_no,
+                            "startColumn": v.col,
+                        },
+                    }
+                }
+            ],
+        }
+        results.append(result)
+
+    sarif = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "RRFS Code Norm Linting",
+                        "informationUri": "https://github.com/NOAA-EMC/rrfs-workflow",
+                        "version": "1.0.0",
+                        "rules": rule_descriptors,
+                    }
+                },
+                "results": results,
+            }
+        ],
+    }
+    return json.dumps(sarif, indent=2)
+
+
+def format_github(violations: list[Violation]) -> str:
+    """GitHub Actions workflow command format.
+
+    Emits ::error and ::warning commands that produce inline annotations
+    on pull request diffs, plus a human-readable summary in the step log
+    """
+    lines = []
+    for v in violations:
+        # Human-readable log line (visible in the Actions step detail page)
+        sev_tag = "RRFS_ERROR" if v.severity == "error" else "RRFS_WARNING"
+        lines.append(f"Error: {sev_tag}:")
+        lines.append(f"{v.filepath}:{v.line_no}:{v.col}: {v.severity}[{v.rule_id}]: {v.message}")
+        lines.append(f"  Suggestion: {v.suggestion}")
+        lines.append("")
+
+        # Workflow command (produces inline annotation on PR diff)
+        msg = v.message.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+        sug = v.suggestion.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+        cmd = "error" if v.severity == "error" else "warning"
+        lines.append(
+            f"::{cmd} file={v.filepath},line={v.line_no},col={v.col},"
+            f"title={v.rule_id}::{msg} | Suggestion: {sug}"
+        )
+        lines.append("")
+
+    # Summary
+    if violations:
+        errors = sum(1 for v in violations if v.severity == "error")
+        warnings = sum(1 for v in violations if v.severity == "warning")
+        files = len(set(v.filepath for v in violations))
+        lines.append("=" * 60)
+        lines.append(f"RRFS Code Norm: {len(violations)} defects ({errors} errors, {warnings} warnings) in {files} file(s), NEEDS INSPECTION")
+    else:
+        lines.append("RRFS Code Norm: all files passed.")
+
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "default": format_default,
     "compact": format_compact,
     "json": format_json,
+    "sarif": format_sarif,
+    "github": format_github,
 }
 
 
@@ -801,7 +917,7 @@ def list_rules():
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="rrfs_lint",
+        prog="linter_rrfs_code_norms",
         description="RRFS Code Norm Linter — lint shell scripts against RRFS coding norms.",
     )
     parser.add_argument(
@@ -814,7 +930,7 @@ def main():
         "--format", "-f",
         choices=FORMATTERS.keys(),
         default="default",
-        help="Output format (default: default).",
+        help="Output format: default, compact, json, sarif, github (default: default).",
     )
     parser.add_argument(
         "--disable",
@@ -861,7 +977,10 @@ def main():
     scripts = find_shell_scripts(args.paths, recursive=not args.no_recursive)
 
     if not scripts:
-        print("rrfs_lint: no shell scripts found.", file=sys.stderr)
+        print("linter_rrfs_code_norms: no shell scripts found.", file=sys.stderr)
+        # Still emit valid output for structured formats
+        if args.format in ("sarif", "json", "github"):
+            print(FORMATTERS[args.format]([]))
         sys.exit(0)
 
     all_violations: list[Violation] = []
@@ -872,8 +991,9 @@ def main():
     if args.severity != "all":
         all_violations = [v for v in all_violations if v.severity == args.severity]
 
+    formatter = FORMATTERS[args.format]
+
     if all_violations:
-        formatter = FORMATTERS[args.format]
         print(formatter(all_violations))
         # Summary
         if args.format == "default":
@@ -881,12 +1001,15 @@ def main():
             warnings = sum(1 for v in all_violations if v.severity == "warning")
             files_with_issues = len(set(v.filepath for v in all_violations))
             print(f"\n{'=' * 60}")
-            print(f"rrfs_lint: {len(all_violations)} issues ({errors} errors, {warnings} warnings) "
+            print(f"linter_rrfs_code_norms: {len(all_violations)} issues ({errors} errors, {warnings} warnings) "
                   f"in {files_with_issues} file(s).")
         sys.exit(1)
     else:
-        if args.format == "default":
-            print(f"rrfs_lint: all {len(scripts)} file(s) passed.")
+        # Always emit valid output for structured formats
+        if args.format in ("sarif", "json", "github"):
+            print(formatter([]))
+        elif args.format == "default":
+            print(f"linter_rrfs_code_norms: all {len(scripts)} file(s) passed.")
         sys.exit(0)
 
 
