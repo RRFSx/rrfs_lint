@@ -283,8 +283,7 @@ def rule_rrfs007_export_uppercase(ctx: RuleContext) -> list[Violation]:
         if not _in_comment(ctx.line, m.start()):
             varname = m.group(1)
             # Allow 'export err=$?', 'export pgm=...', etc as well-known idioms
-            if (varname == "err" or varname == "pgm" or varname == "pid"
-                or varname == "cyc" or varname == "jobid" or varname == "pgmout"):
+            if varname == "err" or varname == "pgm" or varname == "pid" or varname == "cyc" or varname == "jobid" or varname == "pgmout":
                 continue
             violations.append(Violation(
                 filepath=ctx.filepath,
@@ -666,7 +665,7 @@ def lint_file(
         print(f"rrfs_lint: cannot read {filepath}: {exc}", file=sys.stderr)
         return []
 
-    lines = [l.rstrip("\n\r") for l in raw_lines]
+    lines = [line.rstrip("\n\r") for line in raw_lines]
     abs_path = os.path.abspath(filepath)
     path_parts = Path(abs_path).parts
     in_jobs = "jobs" in path_parts
