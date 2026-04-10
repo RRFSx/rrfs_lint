@@ -282,8 +282,9 @@ def rule_rrfs007_export_uppercase(ctx: RuleContext) -> list[Violation]:
     for m in pattern.finditer(ctx.line):
         if not _in_comment(ctx.line, m.start()):
             varname = m.group(1)
-            # Allow 'export err=$?' and 'export pgm=...' as well-known idioms
-            if varname == "err" or varname == "pgm":
+            # Allow 'export err=$?', 'export pgm=...', etc as well-known idioms
+            if (varname == "err" or varname == "pgm" or varname == "pid"
+                or varname == "cyc" or varname == "jobid" or varname == "pgmout"):
                 continue
             violations.append(Violation(
                 filepath=ctx.filepath,
@@ -574,8 +575,6 @@ def rule_rrfs017_standard_varnames(ctx: RuleContext) -> list[Violation]:
         return violations
     renames = {
         "YYYYMMDD": "PDY",
-        "HH": "cyc",
-        "MM": "subcyc",
         "YYYYMMDDHH": "CDATE",
     }
     for old, new in renames.items():
