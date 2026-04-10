@@ -787,10 +787,98 @@ def format_json(violations: list[Violation]) -> str:
     return json.dumps(data, indent=2)
 
 
+def format_sarif(violations: list[Violation]) -> str:
+    """SARIF 2.1.0 output for GitHub Code Scanning integration."""
+    import json
+
+    rules_seen: dict[str, int] = {}  # rule_id -> index
+    rule_descriptors = []
+    for rule_id, desc, _fn in ALL_RULES:
+        rules_seen[rule_id] = len(rule_descriptors)
+        rule_descriptors.append({
+            "id": rule_id,
+            "name": rule_id,
+            "shortDescription": {"text": desc},
+            "helpUri": f"https://github.com/NOAA-EMC/rrfs-workflow/blob/develop/workflow/tools/rrfs_lint.py#{rule_id}",
+            "properties": {"tags": ["rrfs", "coding-standards"]},
+        })
+
+    results = []
+    cwd = os.getcwd()
+    for v in violations:
+        # SARIF severity levels: error, warning, note
+        level = "error" if v.severity == "error" else "warning"
+        # Use path relative to cwd for GitHub Code Scanning
+        rel_path = os.path.relpath(v.filepath, cwd)
+        result = {
+            "ruleId": v.rule_id,
+            "ruleIndex": rules_seen.get(v.rule_id, 0),
+            "level": level,
+            "message": {
+                "text": f"{v.message}\nSuggestion: {v.suggestion}",
+            },
+            "locations": [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {
+                            "uri": rel_path,
+                            "uriBaseId": "%SRCROOT%",
+                        },
+                        "region": {
+                            "startLine": v.line_no,
+                            "startColumn": v.col,
+                        },
+                    }
+                }
+            ],
+        }
+        results.append(result)
+
+    sarif = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "rrfs_lint",
+                        "informationUri": "https://github.com/NOAA-EMC/rrfs-workflow",
+                        "version": "1.0.0",
+                        "rules": rule_descriptors,
+                    }
+                },
+                "results": results,
+            }
+        ],
+    }
+    return json.dumps(sarif, indent=2)
+
+
+def format_github(violations: list[Violation]) -> str:
+    """GitHub Actions workflow command format.
+
+    Emits ::error and ::warning commands that produce inline annotations
+    on pull request diffs.  Works for fork PRs (no special permissions needed).
+    """
+    lines = []
+    for v in violations:
+        # Escape special characters for workflow commands
+        msg = v.message.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+        sug = v.suggestion.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+        cmd = "error" if v.severity == "error" else "warning"
+        lines.append(
+            f"::{cmd} file={v.filepath},line={v.line_no},col={v.col},"
+            f"title={v.rule_id}::{msg} | Suggestion: {sug}"
+        )
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "default": format_default,
     "compact": format_compact,
     "json": format_json,
+    "sarif": format_sarif,
+    "github": format_github,
 }
 
 
@@ -823,7 +911,7 @@ def main():
         "--format", "-f",
         choices=FORMATTERS.keys(),
         default="default",
-        help="Output format (default: default).",
+        help="Output format: default, compact, json, sarif, github (default: default).",
     )
     parser.add_argument(
         "--disable",
